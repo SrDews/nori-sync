@@ -13,7 +13,7 @@ Sync your Obsidian vault with your [Nori](https://nori.study) account — a stud
 Safety rules built into the sync engine:
 
 - **The first sync never deletes anything.** Files only on one side are copied to the other; files that differ on both sides keep both versions (`note (conflicto <date>).md`). You confirm the plan before it runs.
-- Deletions always go to the trash (your system trash locally, a `.papelera/` folder on the server). Five or more deletions in one sync ask for confirmation.
+- Deletions go to the trash: locally, the one set in Obsidian's *Files and links → Deleted files*; on the server, a `.papelera/` folder. Five or more deletions in one sync ask for confirmation.
 - Conflicts are never merged: both versions are kept.
 
 ## Disclosures
@@ -31,7 +31,7 @@ Sincroniza tu vault de Obsidian con tu cuenta de [Nori](https://nori.study).
 2. En Obsidian: **Configuración → Nori Sync**, pegá el código y tocá **Vincular**.
 
 - **El primer sync nunca borra nada**: lo que está de un solo lado se copia al otro, y si un archivo difiere en los dos se guardan ambas versiones. Antes de aplicar, te muestra el resumen para confirmar.
-- Los borrados van siempre a la papelera (la del sistema y `.papelera/` en el servidor).
+- Los borrados van a la papelera: la que tengas configurada en Obsidian y `.papelera/` en el servidor.
 - **Requiere cuenta de Nori** y se conecta solo al servidor de Nori, con tus propios archivos. Sin telemetría ni anuncios.
 
 **Consejo:** usá un vault de Obsidian por cada cuenta de Nori. Si vinculás otra cuenta en el mismo vault, las notas que ya están ahí se suben a esa cuenta.

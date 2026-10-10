@@ -4,7 +4,7 @@
  * `TFile`/`requestUrl`/`crypto.subtle` — el motor de sync no importa nada de
  * acá, así que sigue siendo testeable sin un vault real.
  */
-import { requestUrl, type Vault, TFile, TFolder, normalizePath } from "obsidian";
+import { requestUrl, type Vault, type FileManager, TFile, TFolder, normalizePath } from "obsidian";
 import type { AdaptadorVault, ClienteServidor, RespuestaServidor } from "./sync";
 
 /** Mismo criterio que `vault._oculta()` del lado del servidor: cualquier
@@ -27,7 +27,7 @@ async function hashDeBuffer(datos: ArrayBuffer): Promise<string> {
 }
 
 export class ObsidianVaultAdapter implements AdaptadorVault {
-  constructor(private vault: Vault) {}
+  constructor(private vault: Vault, private fileManager: FileManager) {}
 
   async listar(): Promise<Map<string, string>> {
     const salida = new Map<string, string>();
@@ -55,11 +55,10 @@ export class ObsidianVaultAdapter implements AdaptadorVault {
   async borrarAPapelera(ruta: string): Promise<void> {
     const archivo = this.vault.getAbstractFileByPath(normalizePath(ruta));
     if (archivo instanceof TFile) {
-      // `true` = papelera del SISTEMA operativo cuando está disponible, no
-      // el borrado directo de `vault.delete()` — es el único de los tres
-      // borrados del plugin que no pasa por `.papelera/` del servidor, así
-      // que tiene que ser reversible por su cuenta.
-      await this.vault.trash(archivo, true);
+      // Respeta la preferencia de borrado de Obsidian (papelera del sistema
+      // o `.trash/`). Solo llega acá un archivo que ya se borró en el
+      // servidor, y ese borrado dejó su copia en `.papelera/` de allá.
+      await this.fileManager.trashFile(archivo);
     }
   }
 }

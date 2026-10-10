@@ -6,11 +6,16 @@ on:
     tags: ["*"]
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: main.js
       - env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" main.js manifest.json --title "$GITHUB_REF_NAME" --notes "Nori Sync $GITHUB_REF_NAME"

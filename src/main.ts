@@ -64,7 +64,8 @@ export default class MedSyncPlugin extends Plugin {
   }
 
   async cargarAjustes() {
-    this.settings = Object.assign({}, AJUSTES_DEFECTO, await this.loadData());
+    const guardado = (await this.loadData()) as Partial<MedSyncSettings> | null;
+    this.settings = Object.assign({}, AJUSTES_DEFECTO, guardado);
   }
 
   async guardarAjustes() {
@@ -123,7 +124,8 @@ export default class MedSyncPlugin extends Plugin {
       throw: false,
     });
     if (r.status !== 200) {
-      const error = (r.json && (r.json as { error?: string }).error) || `HTTP ${r.status}`;
+      const cuerpo = r.json as { error?: string } | null;
+      const error = cuerpo?.error || `HTTP ${r.status}`;
       throw new Error(error);
     }
     const datos = r.json as { token: string; usuario: string; modo: "escritura" | "lectura" };
@@ -173,7 +175,7 @@ export default class MedSyncPlugin extends Plugin {
   }
 
   private async correrSync(interactivo: boolean): Promise<void> {
-    const vaultAdapter = new ObsidianVaultAdapter(this.app.vault);
+    const vaultAdapter = new ObsidianVaultAdapter(this.app.vault, this.app.fileManager);
     const cliente = conPrefijo(
       new HttpClienteServidor(this.settings.servidor, this.settings.token!),
       this.settings.carpetaRemota,
@@ -227,6 +229,21 @@ export default class MedSyncPlugin extends Plugin {
   }
 }
 
+/** Reemplazo de `confirm()` (Obsidian pide no usarlo): Aceptar / Cancelar. */
+function confirmar(app: App, texto: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    let resuelto = false;
+    const modal = new Modal(app);
+    modal.contentEl.createEl("p", { text: texto });
+    const botones = modal.contentEl.createDiv({ cls: "modal-button-container" });
+    const responder = (ok: boolean) => { resuelto = true; resolve(ok); modal.close(); };
+    botones.createEl("button", { text: "Aplicar", cls: "mod-cta" }).addEventListener("click", () => responder(true));
+    botones.createEl("button", { text: "Cancelar" }).addEventListener("click", () => responder(false));
+    modal.onClose = () => { if (!resuelto) resolve(false); };
+    modal.open();
+  });
+}
+
 function pedirConfirmacion(app: App, resumen: ResumenPlan, esPrimerSync: boolean): Promise<boolean> {
   return new Promise((resolve) => new ModalConfirmarSync(app, resumen, esPrimerSync, resolve).open());
 }
@@ -269,7 +286,7 @@ class ModalConfirmarSync extends Modal {
       });
     }
     contentEl.createEl("p", {
-      text: "Los borrados van siempre a la papelera (local y del servidor) — nunca son irreversibles, "
+      text: "Los borrados van a la papelera (la que tengas configurada en Obsidian, y la del servidor), "
         + "pero sincronizar de acá en más ya no vuelve a preguntar salvo que borre mucho de nuevo.",
       cls: "setting-item-description",
     });
@@ -322,7 +339,7 @@ class MedSyncSettingTab extends PluginSettingTab {
       .addButton((b) => b.setButtonText("Aplicar").onClick(async () => {
         if (carpetaRemotaValor === this.plugin.settings.carpetaRemota) return;
         const huboSyncPrevio = Object.keys(this.plugin.settings.snapshot).length > 0;
-        if (huboSyncPrevio && !confirm(
+        if (huboSyncPrevio && !await confirmar(this.app,
           "Cambiar la carpeta remota hace que el próximo sync revise todo de nuevo "
           + "(como un primer sync) — no borra nada sin haberlo visto antes, pero sí "
           + "te va a mostrar el conteo para confirmar. ¿Aplicar?")) return;
