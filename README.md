@@ -19,6 +19,7 @@ Safety rules built into the sync engine:
 ## Disclosures
 
 - **Account required.** You need a Nori account (accounts are by invitation to study groups).
+- **Payment required.** The plugin is free, but Nori is a paid service: you need an active Nori account to use it.
 - **Network use.** The plugin talks only to the Nori server (`https://nori.study`, configurable) to list, download, upload and move to trash the files of *your own* vault. Nothing else is sent anywhere.
 - **No telemetry, no ads, no self-updating.**
 - The device token is stored in the plugin's data in your vault; the server keeps only its SHA-256 hash. Unlinking from Nori's panel revokes it.
@@ -33,6 +34,7 @@ Sincroniza tu vault de Obsidian con tu cuenta de [Nori](https://nori.study).
 - **El primer sync nunca borra nada**: lo que está de un solo lado se copia al otro, y si un archivo difiere en los dos se guardan ambas versiones. Antes de aplicar, te muestra el resumen para confirmar.
 - Los borrados van a la papelera: la que tengas configurada en Obsidian y `.papelera/` en el servidor.
 - **Requiere cuenta de Nori** y se conecta solo al servidor de Nori, con tus propios archivos. Sin telemetría ni anuncios.
+- **Nori es un servicio pago:** el plugin es gratis, pero necesitás una cuenta activa de Nori para usarlo.
 
 **Consejo:** usá un vault de Obsidian por cada cuenta de Nori. Si vinculás otra cuenta en el mismo vault, las notas que ya están ahí se suben a esa cuenta.
 
