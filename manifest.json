@@ -1,0 +1,9 @@
+{
+  "id": "nori-sync",
+  "name": "Nori Sync",
+  "version": "1.0.0",
+  "minAppVersion": "1.4.0",
+  "description": "Sync your vault with your Nori study account (nori.study) using a one-time code. Sincroniza tu vault con tu cuenta de Nori.",
+  "author": "Dew",
+  "isDesktopOnly": false
+}

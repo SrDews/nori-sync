@@ -1,0 +1,16 @@
+# Al subir una etiqueta de versión (ej. 1.0.0) crea el release con los
+# archivos que pide Obsidian. main.js va ya compilado en el repo.
+name: Release
+on:
+  push:
+    tags: ["*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" main.js manifest.json --title "$GITHUB_REF_NAME" --notes "Nori Sync $GITHUB_REF_NAME"
