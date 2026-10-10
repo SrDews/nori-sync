@@ -1,4 +1,4 @@
-import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, requestUrl } from "obsidian";
+import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, requestUrl, type SettingDefinitionItem } from "obsidian";
 import { Sincronizador, resumirPlan, conPrefijo, requiereConfirmacion, UMBRAL_BORRADO_MASIVO, type ResumenPlan } from "./sync";
 import { ObsidianVaultAdapter, HttpClienteServidor } from "./adaptadores";
 
@@ -303,112 +303,145 @@ class ModalConfirmarSync extends Modal {
   }
 }
 
+/** Una fila de la configuración: `name` sirve para la búsqueda de Obsidian
+ * 1.13+, `armar` dibuja la fila en las dos APIs (declarativa e imperativa). */
+interface Fila {
+  name: string;
+  armar: (s: Setting) => void;
+}
+
 class MedSyncSettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: MedSyncPlugin) {
     super(app, plugin);
   }
 
+  /** Obsidian 1.13+: la pestaña sale de acá y aparece en la búsqueda de ajustes. */
+  getSettingDefinitions(): SettingDefinitionItem[] {
+    return this.filas().map((f) => ({ name: f.name, render: (s: Setting) => f.armar(s) }));
+  }
+
+  /** Obsidian anterior a 1.13 (desde la 1.13 no se llama: manda getSettingDefinitions). */
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-
-    if (!this.plugin.vinculado()) {
-      this.mostrarFormularioVincular(containerEl);
-      return;
-    }
-
-    containerEl.createEl("p", { text: `Vinculado como ${this.plugin.settings.usuario}.` });
-
-    new Setting(containerEl)
-      .setName("Modo")
-      .setDesc(this.plugin.settings.modo === "lectura"
-        ? "Solo lectura: bajás los apuntes del grupo, tus ediciones no suben."
-        : "Lectura y escritura.")
-      .setDisabled(true);
-
-    let carpetaRemotaValor = this.plugin.settings.carpetaRemota;
-    new Setting(containerEl)
-      .setName("Carpeta remota")
-      .setDesc("Opcional: si el vault del servidor tiene una carpeta contenedora "
-        + "(ej. \"MED 3°\") y querés que ESTE vault empiece directo ahí adentro, "
-        + "sin ese nivel de más, escribila acá. Vacío = sincroniza el vault entero.")
-      .addText((t) => t
-        .setPlaceholder("ej. MED 3°")
-        .setValue(carpetaRemotaValor)
-        .onChange((v) => { carpetaRemotaValor = v; }))
-      .addButton((b) => b.setButtonText("Aplicar").onClick(async () => {
-        if (carpetaRemotaValor === this.plugin.settings.carpetaRemota) return;
-        const huboSyncPrevio = Object.keys(this.plugin.settings.snapshot).length > 0;
-        if (huboSyncPrevio && !await confirmar(this.app,
-          "Cambiar la carpeta remota hace que el próximo sync revise todo de nuevo "
-          + "(como un primer sync) — no borra nada sin haberlo visto antes, pero sí "
-          + "te va a mostrar el conteo para confirmar. ¿Aplicar?")) return;
-        this.plugin.settings.carpetaRemota = carpetaRemotaValor;
-        this.plugin.settings.snapshot = {};   // las rutas cambiaron de raíz: no comparables contra lo viejo
-        await this.plugin.guardarAjustes();
-        new Notice("Nori: carpeta remota actualizada.");
-      }));
-
-    new Setting(containerEl)
-      .setName("Sincronización automática")
-      .setDesc("Cada cuántas horas sincroniza solo. \"Manual\" = solo con el botón o el comando.")
-      .addDropdown((d) => {
-        d.addOption("0", "Manual");
-        for (const horas of [1, 3, 6, 12, 24]) d.addOption(String(horas), `Cada ${horas} h`);
-        d.setValue(String(this.plugin.settings.intervaloHoras));
-        d.onChange(async (valor) => {
-          this.plugin.settings.intervaloHoras = Number(valor);
-          await this.plugin.guardarAjustes();
-          this.plugin.configurarAutoSync();
-        });
-      });
-
-    new Setting(containerEl)
-      .setName("Sincronizar ahora")
-      .setDesc(this.plugin.settings.ultimoSync
-        ? `Último sync: ${new Date(this.plugin.settings.ultimoSync).toLocaleString()}`
-        : "Todavía no sincronizó.")
-      .addButton((b) => b.setButtonText("Sincronizar").setCta().onClick(() => this.plugin.syncAhora(true)));
-
-    new Setting(containerEl)
-      .setName("Desvincular")
-      .setDesc("Olvida este dispositivo. Para cortarle el acceso de verdad, revocalo desde el panel "
-        + "web → Configuración → Conexiones.")
-      .addButton((b) => b.setButtonText("Desvincular").setWarning().onClick(async () => {
-        await this.plugin.desvincular();
-        this.display();
-      }));
+    for (const f of this.filas()) f.armar(new Setting(containerEl));
   }
 
-  private mostrarFormularioVincular(containerEl: HTMLElement): void {
-    containerEl.createEl("p", {
-      text: "En el panel web: Configuración → Conexiones → \"Vincular Obsidian\". "
-        + "Pegá acá el código que te muestra.",
-    });
+  /** Redibuja tras vincular o desvincular, con la API que tenga esta versión. */
+  private refrescar(): void {
+    if (typeof this.update === "function") this.update();
+    else this.display();
+  }
 
+  private filas(): Fila[] {
+    return this.plugin.vinculado() ? this.filasVinculado() : this.filasSinVincular();
+  }
+
+  private filasVinculado(): Fila[] {
+    const ajustes = this.plugin.settings;
+    let carpetaRemotaValor = ajustes.carpetaRemota;
+    return [
+      {
+        name: "Cuenta",
+        armar: (s) => s.setName("Cuenta").setDesc(`Vinculado como ${ajustes.usuario}.`),
+      },
+      {
+        name: "Modo",
+        armar: (s) => s.setName("Modo")
+          .setDesc(ajustes.modo === "lectura"
+            ? "Solo lectura: bajás los apuntes del grupo, tus ediciones no suben."
+            : "Lectura y escritura.")
+          .setDisabled(true),
+      },
+      {
+        name: "Carpeta remota",
+        armar: (s) => s.setName("Carpeta remota")
+          .setDesc("Opcional: si el vault del servidor tiene una carpeta contenedora "
+            + "(ej. \"MED 3°\") y querés que ESTE vault empiece directo ahí adentro, "
+            + "sin ese nivel de más, escribila acá. Vacío = sincroniza el vault entero.")
+          .addText((t) => t
+            .setPlaceholder("ej. MED 3°")
+            .setValue(carpetaRemotaValor)
+            .onChange((v) => { carpetaRemotaValor = v; }))
+          .addButton((b) => b.setButtonText("Aplicar").onClick(async () => {
+            if (carpetaRemotaValor === ajustes.carpetaRemota) return;
+            const huboSyncPrevio = Object.keys(ajustes.snapshot).length > 0;
+            if (huboSyncPrevio && !await confirmar(this.app,
+              "Cambiar la carpeta remota hace que el próximo sync revise todo de nuevo "
+              + "(como un primer sync) — no borra nada sin haberlo visto antes, pero sí "
+              + "te va a mostrar el conteo para confirmar. ¿Aplicar?")) return;
+            ajustes.carpetaRemota = carpetaRemotaValor;
+            ajustes.snapshot = {};   // las rutas cambiaron de raíz: no comparables contra lo viejo
+            await this.plugin.guardarAjustes();
+            new Notice("Nori: carpeta remota actualizada.");
+          })),
+      },
+      {
+        name: "Sincronización automática",
+        armar: (s) => s.setName("Sincronización automática")
+          .setDesc("Cada cuántas horas sincroniza solo. \"Manual\" = solo con el botón o el comando.")
+          .addDropdown((d) => {
+            d.addOption("0", "Manual");
+            for (const horas of [1, 3, 6, 12, 24]) d.addOption(String(horas), `Cada ${horas} h`);
+            d.setValue(String(ajustes.intervaloHoras));
+            d.onChange(async (valor) => {
+              ajustes.intervaloHoras = Number(valor);
+              await this.plugin.guardarAjustes();
+              this.plugin.configurarAutoSync();
+            });
+          }),
+      },
+      {
+        name: "Sincronizar ahora",
+        armar: (s) => s.setName("Sincronizar ahora")
+          .setDesc(ajustes.ultimoSync
+            ? `Último sync: ${new Date(ajustes.ultimoSync).toLocaleString()}`
+            : "Todavía no sincronizó.")
+          .addButton((b) => b.setButtonText("Sincronizar").setCta().onClick(() => this.plugin.syncAhora(true))),
+      },
+      {
+        name: "Desvincular",
+        armar: (s) => s.setName("Desvincular")
+          .setDesc("Olvida este dispositivo. Para cortarle el acceso de verdad, revocalo desde el panel "
+            + "web → Configuración → Conexiones.")
+          .addButton((b) => b.setButtonText("Desvincular").setWarning().onClick(async () => {
+            await this.plugin.desvincular();
+            this.refrescar();
+          })),
+      },
+    ];
+  }
+
+  private filasSinVincular(): Fila[] {
     let codigo = "";
     let nombreDispositivo = Platform.isMobile ? "Celular" : "PC";
-    let elementoError: HTMLElement | null = null;
-
-    new Setting(containerEl)
-      .setName("Código")
-      .addText((t) => t.setPlaceholder("XXXX-XXXX").onChange((v) => { codigo = v.trim(); }));
-
-    new Setting(containerEl)
-      .setName("Nombre de este dispositivo")
-      .setDesc("Para reconocerlo en la lista de dispositivos vinculados.")
-      .addText((t) => t.setValue(nombreDispositivo).onChange((v) => { nombreDispositivo = v.trim(); }));
-
-    new Setting(containerEl).addButton((b) => b.setButtonText("Vincular").setCta().onClick(async () => {
-      elementoError?.remove();
-      if (!codigo) return;
-      try {
-        await this.plugin.vincular(codigo, nombreDispositivo);
-        new Notice("Nori: vinculado.");
-        this.display();
-      } catch (e) {
-        elementoError = containerEl.createEl("p", { text: `${e}`, cls: "mod-warning" });
-      }
-    }));
+    return [
+      {
+        name: "Código",
+        armar: (s) => s.setName("Código")
+          .setDesc("En el panel web: Configuración → Conexiones → \"Vincular Obsidian\". "
+            + "Pegá acá el código que te muestra.")
+          .addText((t) => t.setPlaceholder("XXXX-XXXX").onChange((v) => { codigo = v.trim(); })),
+      },
+      {
+        name: "Nombre de este dispositivo",
+        armar: (s) => s.setName("Nombre de este dispositivo")
+          .setDesc("Para reconocerlo en la lista de dispositivos vinculados.")
+          .addText((t) => t.setValue(nombreDispositivo).onChange((v) => { nombreDispositivo = v.trim(); })),
+      },
+      {
+        name: "Vincular",
+        armar: (s) => s.setName("Vincular").addButton((b) => b.setButtonText("Vincular").setCta().onClick(async () => {
+          if (!codigo) return;
+          try {
+            await this.plugin.vincular(codigo, nombreDispositivo);
+            new Notice("Nori: vinculado.");
+            this.refrescar();
+          } catch (e) {
+            s.setDesc(`${e}`);
+          }
+        })),
+      },
+    ];
   }
 }
