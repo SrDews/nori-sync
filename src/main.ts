@@ -1,4 +1,4 @@
-import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, requestUrl, type SettingDefinitionItem } from "obsidian";
+import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, requestUrl, requireApiVersion, type SettingDefinitionItem } from "obsidian";
 import { Sincronizador, resumirPlan, conPrefijo, requiereConfirmacion, UMBRAL_BORRADO_MASIVO, type ResumenPlan } from "./sync";
 import { ObsidianVaultAdapter, HttpClienteServidor } from "./adaptadores";
 
@@ -94,7 +94,7 @@ export default class MedSyncPlugin extends Plugin {
     }
     if (!this.vinculado() || this.settings.intervaloHoras <= 0) return;
     this.timerAutoSync = window.setInterval(
-      () => this.syncAhora(false),
+      () => { void this.syncAhora(false); },
       this.settings.intervaloHoras * 3600 * 1000,
     );
     this.registerInterval(this.timerAutoSync);
@@ -106,7 +106,7 @@ export default class MedSyncPlugin extends Plugin {
       || Date.now() - new Date(this.settings.ultimoSync).getTime() >= this.settings.intervaloHoras * 3600 * 1000;
     if (vencido) {
       // Pequeña demora para no competir con el resto de los plugins al abrir.
-      window.setTimeout(() => this.syncAhora(false), 5000);
+      window.setTimeout(() => { void this.syncAhora(false); }, 5000);
     }
   }
 
@@ -329,7 +329,7 @@ class MedSyncSettingTab extends PluginSettingTab {
 
   /** Redibuja tras vincular o desvincular, con la API que tenga esta versión. */
   private refrescar(): void {
-    if (typeof this.update === "function") this.update();
+    if (requireApiVersion("1.13.0")) this.update();
     else this.display();
   }
 
@@ -343,19 +343,24 @@ class MedSyncSettingTab extends PluginSettingTab {
     return [
       {
         name: "Cuenta",
-        armar: (s) => s.setName("Cuenta").setDesc(`Vinculado como ${ajustes.usuario}.`),
+        armar: (s) => {
+          s.setName("Cuenta").setDesc(`Vinculado como ${ajustes.usuario}.`);
+        },
       },
       {
         name: "Modo",
-        armar: (s) => s.setName("Modo")
+        armar: (s) => {
+          s.setName("Modo")
           .setDesc(ajustes.modo === "lectura"
             ? "Solo lectura: bajás los apuntes del grupo, tus ediciones no suben."
             : "Lectura y escritura.")
-          .setDisabled(true),
+          .setDisabled(true);
+        },
       },
       {
         name: "Carpeta remota",
-        armar: (s) => s.setName("Carpeta remota")
+        armar: (s) => {
+          s.setName("Carpeta remota")
           .setDesc("Opcional: si el vault del servidor tiene una carpeta contenedora "
             + "(ej. \"MED 3°\") y querés que ESTE vault empiece directo ahí adentro, "
             + "sin ese nivel de más, escribila acá. Vacío = sincroniza el vault entero.")
@@ -374,11 +379,13 @@ class MedSyncSettingTab extends PluginSettingTab {
             ajustes.snapshot = {};   // las rutas cambiaron de raíz: no comparables contra lo viejo
             await this.plugin.guardarAjustes();
             new Notice("Nori: carpeta remota actualizada.");
-          })),
+          }));
+        },
       },
       {
         name: "Sincronización automática",
-        armar: (s) => s.setName("Sincronización automática")
+        armar: (s) => {
+          s.setName("Sincronización automática")
           .setDesc("Cada cuántas horas sincroniza solo. \"Manual\" = solo con el botón o el comando.")
           .addDropdown((d) => {
             d.addOption("0", "Manual");
@@ -389,25 +396,30 @@ class MedSyncSettingTab extends PluginSettingTab {
               await this.plugin.guardarAjustes();
               this.plugin.configurarAutoSync();
             });
-          }),
+          });
+        },
       },
       {
         name: "Sincronizar ahora",
-        armar: (s) => s.setName("Sincronizar ahora")
+        armar: (s) => {
+          s.setName("Sincronizar ahora")
           .setDesc(ajustes.ultimoSync
             ? `Último sync: ${new Date(ajustes.ultimoSync).toLocaleString()}`
             : "Todavía no sincronizó.")
-          .addButton((b) => b.setButtonText("Sincronizar").setCta().onClick(() => this.plugin.syncAhora(true))),
+          .addButton((b) => b.setButtonText("Sincronizar").setCta().onClick(() => { void this.plugin.syncAhora(true); }));
+        },
       },
       {
         name: "Desvincular",
-        armar: (s) => s.setName("Desvincular")
+        armar: (s) => {
+          s.setName("Desvincular")
           .setDesc("Olvida este dispositivo. Para cortarle el acceso de verdad, revocalo desde el panel "
             + "web → Configuración → Conexiones.")
           .addButton((b) => b.setButtonText("Desvincular").setWarning().onClick(async () => {
             await this.plugin.desvincular();
             this.refrescar();
-          })),
+          }));
+        },
       },
     ];
   }
@@ -418,20 +430,25 @@ class MedSyncSettingTab extends PluginSettingTab {
     return [
       {
         name: "Código",
-        armar: (s) => s.setName("Código")
+        armar: (s) => {
+          s.setName("Código")
           .setDesc("En el panel web: Configuración → Conexiones → \"Vincular Obsidian\". "
             + "Pegá acá el código que te muestra.")
-          .addText((t) => t.setPlaceholder("XXXX-XXXX").onChange((v) => { codigo = v.trim(); })),
+          .addText((t) => t.setPlaceholder("XXXX-XXXX").onChange((v) => { codigo = v.trim(); }));
+        },
       },
       {
         name: "Nombre de este dispositivo",
-        armar: (s) => s.setName("Nombre de este dispositivo")
+        armar: (s) => {
+          s.setName("Nombre de este dispositivo")
           .setDesc("Para reconocerlo en la lista de dispositivos vinculados.")
-          .addText((t) => t.setValue(nombreDispositivo).onChange((v) => { nombreDispositivo = v.trim(); })),
+          .addText((t) => t.setValue(nombreDispositivo).onChange((v) => { nombreDispositivo = v.trim(); }));
+        },
       },
       {
         name: "Vincular",
-        armar: (s) => s.setName("Vincular").addButton((b) => b.setButtonText("Vincular").setCta().onClick(async () => {
+        armar: (s) => {
+          s.setName("Vincular").addButton((b) => b.setButtonText("Vincular").setCta().onClick(async () => {
           if (!codigo) return;
           try {
             await this.plugin.vincular(codigo, nombreDispositivo);
@@ -440,7 +457,8 @@ class MedSyncSettingTab extends PluginSettingTab {
           } catch (e) {
             s.setDesc(`${e}`);
           }
-        })),
+        }));
+        },
       },
     ];
   }
