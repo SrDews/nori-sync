@@ -1,0 +1,55 @@
+/* Nori Sync — selector de Vaults Nori (PLAN_VAULTS_NORI V.3). Solo variables de Obsidian: respeta el tema. */
+.nori-modal-vaults { width: min(720px, 92vw); }
+.nori-uso { color: var(--text-muted); font-size: var(--font-ui-small); }
+.nori-vaults {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: var(--size-4-3);
+  margin: var(--size-4-3) 0;
+}
+.nori-vault-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-1);
+  padding: var(--size-4-4);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-l);
+  background: var(--background-secondary);
+  cursor: pointer;
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+.nori-vault-card:hover { border-color: var(--interactive-accent); transform: translateY(-1px); }
+.nori-vault-card.is-actual { border-color: var(--interactive-accent); box-shadow: 0 0 0 1px var(--interactive-accent); }
+.nori-vault-card--nuevo { border-style: dashed; background: transparent; }
+.nori-vault-icono {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-m);
+  background: var(--background-modifier-hover);
+  color: var(--interactive-accent);
+}
+.nori-vault-nombre { font-weight: var(--font-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nori-vault-datos { color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.nori-vault-marca {
+  position: absolute;
+  top: var(--size-4-2);
+  right: var(--size-4-2);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  border-radius: var(--radius-s);
+  padding: 0 var(--size-4-1);
+}
+.nori-archivados > summary { cursor: pointer; color: var(--text-muted); font-size: var(--font-ui-small); }
+.nori-link {
+  background: none;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  padding: 0;
+  text-decoration: underline;
+}
+.nori-input { width: 100%; }

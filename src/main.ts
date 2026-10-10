@@ -1,6 +1,11 @@
 import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, requestUrl, requireApiVersion, type SettingDefinitionItem } from "obsidian";
-import { Sincronizador, resumirPlan, conPrefijo, requiereConfirmacion, UMBRAL_BORRADO_MASIVO, type ResumenPlan } from "./sync";
+import { Sincronizador, resumirPlan, conPrefijo, requiereConfirmacion, UMBRAL_BORRADO_MASIVO, type ClienteServidor, type ResumenPlan } from "./sync";
 import { ObsidianVaultAdapter, HttpClienteServidor } from "./adaptadores";
+import { decidirCambioVault, megas, type EntradaCache } from "./vaults";
+import {
+  acomodarFotos, archivosLocales, crearVaultNori, elegirOpcion, listarVaultsNori, ModalVaultsNori, notasLocales, pedirTexto,
+  previsualizarFotos, type ResumenVaults,
+} from "./vaultsUi";
 
 interface MedSyncSettings {
   servidor: string;
@@ -19,6 +24,16 @@ interface MedSyncSettings {
    * por WebDAV apuntando a una subcarpeta puntual. Sin heurística: es texto
    * que la persona tipea una vez. */
   carpetaRemota: string;
+  /** V.2: ruta → {mtime, size, hash} del vault local, para no releer lo que no cambió. */
+  cacheHashes: Record<string, EntradaCache>;
+  /** V.4: fotos ya movidas acá que falta mover igual en el servidor (`POST /api/vault/mover`). */
+  movimientosPendientes: Array<{ de: string; a: string }>;
+  /** V.4: la persona ya aceptó una vez que Nori Sync acomode las fotos en FOTOS/. */
+  fotosAcordado: boolean;
+  /** V.3: la cuenta que tuvo este Obsidian antes de desvincularlo (para avisar antes de mezclar cuentas). */
+  ultimoUsuario: string | null;
+  /** V.4: fotos que volvieron a su lugar porque moverlas rompía un enlace: no se reintentan en cada sync. */
+  fotosQuedan: string[];
 }
 
 const AJUSTES_DEFECTO: MedSyncSettings = {
@@ -30,6 +45,11 @@ const AJUSTES_DEFECTO: MedSyncSettings = {
   ultimoSync: null,
   snapshot: {},
   carpetaRemota: "",
+  cacheHashes: {},
+  movimientosPendientes: [],
+  fotosAcordado: false,
+  ultimoUsuario: null,
+  fotosQuedan: [],
 };
 
 export default class MedSyncPlugin extends Plugin {
@@ -37,6 +57,8 @@ export default class MedSyncPlugin extends Plugin {
   private itemStatusBar!: HTMLElement;
   private timerAutoSync: number | null = null;
   private sincronizando = false;
+  private avisoFotosMostrado = false;
+  private ultimoUso: { bytes: number; cuota: number } | null = null;
 
   async onload() {
     await this.cargarAjustes();
@@ -129,18 +151,95 @@ export default class MedSyncPlugin extends Plugin {
       throw new Error(error);
     }
     const datos = r.json as { token: string; usuario: string; modo: "escritura" | "lectura" };
+    const otraCuenta = !!this.settings.ultimoUsuario && this.settings.ultimoUsuario !== datos.usuario
+      && notasLocales(this.app) > 0;
     this.settings.token = datos.token;
     this.settings.usuario = datos.usuario;
     this.settings.modo = datos.modo;
     await this.guardarAjustes();
     this.configurarAutoSync();
     this.actualizarStatusBar();
+    await this.elegirVault(otraCuenta, otraCuenta
+      ? `Este Obsidian estuvo vinculado a la cuenta de ${this.settings.ultimoUsuario}. Si juntás sus notas con un `
+        + `Vault Nori de ${datos.usuario}, se suben a esta cuenta: mejor creá un Vault Nori nuevo o usá otro vault de Obsidian.`
+      : null);
+  }
+
+  /** V.3: elegir (o crear) el Vault Nori de este Obsidian. Cambiarlo empieza el sync de cero (sin borrar nada). */
+  async elegirVault(otraCuenta = false, aviso: string | null = null): Promise<void> {
+    if (!this.settings.token) return;
+    let datos: ResumenVaults;
+    try {
+      datos = await listarVaultsNori(this.settings.servidor, this.settings.token);
+    } catch (e) {
+      new Notice(`Nori: no se pudieron traer tus Vaults Nori — ${e}`);
+      return;
+    }
+    const eleccion = await ModalVaultsNori.elegir(this.app, datos, this.settings.carpetaRemota || null, aviso);
+    if (!eleccion) return;
+    let nombre: string | null = null;
+    try {
+      if (eleccion.tipo === "todo") {
+        nombre = "";
+      } else if (eleccion.tipo === "nuevo") {
+        nombre = await this.crearVault();
+      } else {
+        nombre = eleccion.vault.nombre;
+      }
+      nombre = nombre === null ? null : await this.confirmarCambio(nombre, eleccion.tipo === "vault" ? eleccion.vault.notas : 0, otraCuenta);
+    } catch (e) {
+      new Notice(`Nori: ${e}`);
+      return;
+    }
+    if (nombre === null) return;
+    if (nombre !== this.settings.carpetaRemota) {
+      this.settings.carpetaRemota = nombre;
+      this.settings.snapshot = {};               // otra raíz: nada de lo visto antes es comparable
+      this.settings.movimientosPendientes = [];
+      this.settings.fotosQuedan = [];
+      await this.guardarAjustes();
+    }
+    new Notice(nombre ? `Nori: este Obsidian quedó con el Vault Nori «${nombre}». Sincronizá para traer su contenido.`
+      : "Nori: este Obsidian sincroniza todo tu Nori.");
+  }
+
+  /** Lo que ya hay en este Obsidian se sube al Vault Nori nuevo: avisar o bloquear antes (ver `decidirCambioVault`). */
+  private async confirmarCambio(nombre: string, notasRemotas: number, otraCuenta: boolean): Promise<string | null> {
+    const actual = this.settings.carpetaRemota;
+    let decision = decidirCambioVault(actual, nombre, archivosLocales(this.app));
+    // Lo de otra cuenta se sube a esta aunque el nombre del Vault Nori sea el mismo: siempre se pregunta.
+    if (otraCuenta && decision === "directo" && archivosLocales(this.app) > 0) decision = "preguntar";
+    if (decision === "directo") return nombre;
+    if (decision === "bloquear") {
+      await elegirOpcion(this.app, "Usá otro vault de Obsidian",
+        actual === ""
+          ? "Este Obsidian tiene todo tu Nori, con sus carpetas. Si lo pasás a un solo Vault Nori, todo eso se subiría "
+            + `adentro de «${nombre}», un nivel más abajo. Abrí un vault de Obsidian vacío y vinculalo a «${nombre}».`
+          : "Este Obsidian tiene el contenido de un Vault Nori. Para sincronizar todo tu Nori, abrí un vault de "
+            + "Obsidian vacío y vinculalo ahí.",
+        [{ valor: "ok", texto: "Entendido", cta: true }]);
+      return null;
+    }
+    const que = await elegirOpcion(this.app, "Este Obsidian ya tiene archivos",
+      `Todo lo que hay acá${actual ? ` (el contenido de «${actual}»)` : ""} se va a subir a «${nombre}»`
+      + (notasRemotas ? `, y las ${notasRemotas} notas de «${nombre}» van a bajar acá` : "")
+      + ". No se borra nada. Para separar cortes o semestres, lo mejor es un vault de Obsidian por cada Vault Nori.",
+      [{ valor: "cancelar", texto: "Cancelar", cta: true }, { valor: "juntar", texto: "Juntar igual" }]);
+    return que === "juntar" ? nombre : null;
+  }
+
+  private async crearVault(): Promise<string | null> {
+    const nombre = await pedirTexto(this.app, "Vault Nori nuevo", "Ej.: Semestre 4 · 1° corte");
+    if (!nombre) return null;
+    return crearVaultNori(this.settings.servidor, this.settings.token!, nombre);
   }
 
   /** Solo olvida la vinculación LOCAL — revocar el dispositivo del lado del
    * servidor se hace desde el panel web (Configuración → Conexiones), que es
    * el lugar donde ya vive la lista completa de dispositivos de la persona. */
   async desvincular(): Promise<void> {
+    this.settings.ultimoUsuario = this.settings.usuario || this.settings.ultimoUsuario;
+    this.settings.movimientosPendientes = [];
     this.settings.token = null;
     this.settings.usuario = null;
     this.settings.modo = null;
@@ -175,11 +274,12 @@ export default class MedSyncPlugin extends Plugin {
   }
 
   private async correrSync(interactivo: boolean): Promise<void> {
-    const vaultAdapter = new ObsidianVaultAdapter(this.app.vault, this.app.fileManager);
+    const vaultAdapter = new ObsidianVaultAdapter(this.app.vault, this.app.fileManager, this.settings.cacheHashes);
     const cliente = conPrefijo(
       new HttpClienteServidor(this.settings.servidor, this.settings.token!),
       this.settings.carpetaRemota,
     );
+    if (!await this.prepararSync(interactivo, cliente)) return;
     const snapshot = new Map(Object.entries(this.settings.snapshot));
     const sinc = new Sincronizador(vaultAdapter, cliente, snapshot, async (s) => {
       this.settings.snapshot = Object.fromEntries(s);
@@ -221,10 +321,109 @@ export default class MedSyncPlugin extends Plugin {
       new Notice(partes.length ? `Nori: ${partes.join(", ")}.` : "Nori: todo al día.");
       if (r.errores.length) {
         console.error("Nori — errores durante el sync:", r.errores);
+        if (r.errores.some((e) => e.includes("HTTP 507"))) {
+          new Notice("Nori: llegaste al máximo de espacio de tu cuenta. Archivá o borrá algo en Nori para seguir subiendo.", 15000);
+        }
+        if (r.errores.some((e) => e.includes("HTTP 422"))) {
+          new Notice("Nori: hay fotos fuera de una carpeta FOTOS que el servidor no acepta (mirá la consola).", 15000);
+        }
         new Notice(`Nori: ${r.errores.length} archivo(s) fallaron — mirá la consola.`);
       }
+      this.avisarCuota();
     } catch (e) {
       new Notice(`Nori: error — ${e}`);
+    }
+  }
+
+  /**
+   * Antes de planificar (PLAN_VAULTS_NORI): el Vault Nori elegido tiene que seguir existiendo (si se renombró en
+   * Nori, sincronizar contra la ruta vieja vería todo «borrado» en el servidor); las fotos se acomodan en FOTOS/
+   * (V.4) y lo que ya se movió acá se mueve igual en el servidor, sin borrar ni volver a subir. `false` = no sincronizar.
+   */
+  private async prepararSync(interactivo: boolean, cliente: ClienteServidor): Promise<boolean> {
+    const nombre = this.settings.carpetaRemota;
+    try {
+      const datos = await listarVaultsNori(this.settings.servidor, this.settings.token!);
+      this.ultimoUso = datos.uso;
+      if (nombre && !datos.vaults.some((v) => v.nombre === nombre)) {
+        new Notice(`Nori: el Vault Nori «${nombre}» ya no existe en Nori (¿lo renombraste?). `
+          + "Elegí uno en Configuración → Nori Sync; no se sincronizó nada.", 15000);
+        return false;
+      }
+    } catch (e) {
+      new Notice(`Nori: no se pudo conectar — ${e}`);
+      return false;
+    }
+    if (this.settings.modo === "lectura") return true;
+
+    const todo = !nombre;
+    const quedan = new Set(this.settings.fotosQuedan);
+    // Sin el «sí» de la persona, el sync automático no se frena: sigue sin mover fotos (las que estén fuera de
+    // FOTOS/ el servidor no las acepta hasta entonces) y avisa una sola vez.
+    const previa = await previsualizarFotos(this.app, todo, quedan, interactivo);
+    if (previa.fotos && !this.settings.fotosAcordado && !interactivo) {
+      if (!this.avisoFotosMostrado) {
+        new Notice("Nori: hay fotos para acomodar en FOTOS/ — sincronizá a mano una vez para confirmarlo.", 10000);
+        this.avisoFotosMostrado = true;
+      }
+    } else if (previa.fotos) {
+      if (!this.settings.fotosAcordado) {
+        const ok = await confirmar(this.app,
+          `Nori Sync guarda las fotos en la carpeta FOTOS${todo ? " de cada Vault Nori" : ""}. Se van a mover `
+          + `${previa.fotos} foto(s) a FOTOS/ y actualizar ${previa.enlaces} enlace(s) en tus notas y tableros. `
+          + "Nada se borra, y si algún enlace se rompiera, esa foto vuelve a su lugar.");
+        if (!ok) return false;
+        this.settings.fotosAcordado = true;
+      }
+      const r = await acomodarFotos(this.app, todo, quedan);
+      this.settings.movimientosPendientes.push(...r.movidas);
+      this.settings.fotosQuedan = [...new Set([...this.settings.fotosQuedan, ...r.revertidas])];
+      await this.guardarAjustes();
+      if (r.movidas.length) new Notice(`Nori: ${r.movidas.length} foto(s) movidas a FOTOS/, ${r.enlaces} enlace(s) al día.`);
+      if (r.revertidas.length) {
+        console.warn("Nori — fotos que volvieron a su lugar (rompían enlaces):", r.revertidas);
+        new Notice(`Nori: ${r.revertidas.length} foto(s) no se movieron porque rompían un enlace (mirá la consola).`, 15000);
+      }
+    }
+    if (previa.sinLugar.length) {
+      console.warn("Nori — fotos sueltas en la raíz, sin Vault Nori:", previa.sinLugar);
+    }
+    await this.moverPendientesEnServidor(cliente);
+    return true;
+  }
+
+  /** Lo movido acá se mueve igual en el servidor: el snapshot queda al día y el sync no ve borrados ni subidas. */
+  private async moverPendientesEnServidor(cliente: ClienteServidor): Promise<void> {
+    const pendientes = this.settings.movimientosPendientes;
+    if (!pendientes.length || !cliente.mover) return;
+    const remoto = (await cliente.manifiesto()).archivos;
+    const quedan: Array<{ de: string; a: string }> = [];
+    for (const m of pendientes) {
+      // La precondición es lo que ESTE dispositivo vio (el snapshot), no lo que hay hoy en el servidor: si allá la
+      // foto cambió desde el último sync, no se mueve y el sync normal lo trata como un cambio más (sin pisar nada).
+      const h = this.settings.snapshot[m.de];
+      if (h === undefined || remoto.get(m.de) !== h || remoto.has(m.a)) continue;
+      try {
+        const r = await cliente.mover(m.de, m.a, h);
+        if (r.ok) {
+          delete this.settings.snapshot[m.de];
+          this.settings.snapshot[m.a] = h;
+        } else if (r.status >= 500 || r.status === 0) {
+          quedan.push(m);
+        }
+      } catch {
+        quedan.push(m);                                             // sin red: se reintenta en el próximo sync
+      }
+    }
+    this.settings.movimientosPendientes = quedan;
+    await this.guardarAjustes();
+  }
+
+  /** V.7: aviso al pasar el 80 % de la cuota de la cuenta. */
+  private avisarCuota(): void {
+    const uso = this.ultimoUso;        // el de `prepararSync`: no hace falta otro pedido por sync
+    if (uso && uso.cuota && uso.bytes / uso.cuota >= 0.8) {
+      new Notice(`Nori: usás ${megas(uso.bytes)} de ${megas(uso.cuota)}. Archivá o borrá lo que no uses en Nori.`, 12000);
     }
   }
 }
@@ -339,7 +538,6 @@ class MedSyncSettingTab extends PluginSettingTab {
 
   private filasVinculado(): Fila[] {
     const ajustes = this.plugin.settings;
-    let carpetaRemotaValor = ajustes.carpetaRemota;
     return [
       {
         name: "Cuenta",
@@ -358,28 +556,27 @@ class MedSyncSettingTab extends PluginSettingTab {
         },
       },
       {
-        name: "Carpeta remota",
+        name: "Vault Nori",
         armar: (s) => {
-          s.setName("Carpeta remota")
-          .setDesc("Opcional: si el vault del servidor tiene una carpeta contenedora "
-            + "(ej. \"MED 3°\") y querés que ESTE vault empiece directo ahí adentro, "
-            + "sin ese nivel de más, escribila acá. Vacío = sincroniza el vault entero.")
-          .addText((t) => t
-            .setPlaceholder("ej. MED 3°")
-            .setValue(carpetaRemotaValor)
-            .onChange((v) => { carpetaRemotaValor = v; }))
-          .addButton((b) => b.setButtonText("Aplicar").onClick(async () => {
-            if (carpetaRemotaValor === ajustes.carpetaRemota) return;
-            const huboSyncPrevio = Object.keys(ajustes.snapshot).length > 0;
-            if (huboSyncPrevio && !await confirmar(this.app,
-              "Cambiar la carpeta remota hace que el próximo sync revise todo de nuevo "
-              + "(como un primer sync) — no borra nada sin haberlo visto antes, pero sí "
-              + "te va a mostrar el conteo para confirmar. ¿Aplicar?")) return;
-            ajustes.carpetaRemota = carpetaRemotaValor;
-            ajustes.snapshot = {};   // las rutas cambiaron de raíz: no comparables contra lo viejo
-            await this.plugin.guardarAjustes();
-            new Notice("Nori: carpeta remota actualizada.");
+          s.setName("Vault Nori")
+          .setDesc(ajustes.carpetaRemota
+            ? `Este Obsidian tiene el contenido de «${ajustes.carpetaRemota}».`
+            : "Este Obsidian sincroniza todo tu Nori (todas las carpetas).")
+          .addButton((b) => b.setButtonText("Cambiar").setCta().onClick(() => {
+            void this.plugin.elegirVault().then(() => this.refrescar());
           }));
+        },
+      },
+      {
+        name: "Espacio usado",
+        armar: (s) => {
+          s.setName("Espacio usado").setDesc("Consultando…");
+          listarVaultsNori(ajustes.servidor, ajustes.token!)
+            .then(({ uso }) => {
+              const alto = uso.cuota > 0 && uso.bytes / uso.cuota >= 0.8;
+              s.setDesc(`Usás ${megas(uso.bytes)} de ${megas(uso.cuota)}${alto ? " — casi lleno: archivá o borrá lo que no uses en Nori." : "."}`);
+            })
+            .catch(() => s.setDesc("No se pudo consultar."));
         },
       },
       {

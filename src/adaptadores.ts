@@ -6,6 +6,7 @@
  */
 import { requestUrl, type Vault, type FileManager, TFile, TFolder, normalizePath } from "obsidian";
 import type { AdaptadorVault, ClienteServidor, RespuestaServidor } from "./sync";
+import { hashEnCache, type EntradaCache } from "./vaults";
 
 /** Mismo criterio que `vault._oculta()` del lado del servidor: cualquier
  * segmento de ruta que empiece con punto queda afuera del sync — así
@@ -27,15 +28,25 @@ async function hashDeBuffer(datos: ArrayBuffer): Promise<string> {
 }
 
 export class ObsidianVaultAdapter implements AdaptadorVault {
-  constructor(private vault: Vault, private fileManager: FileManager) {}
+  /** `cache` (V.2 de PLAN_VAULTS_NORI): ruta → {mtime, size, hash}. Un archivo solo se relee si cambió su fecha o
+   * su tamaño: con un vault lleno de fotos, un sync sin cambios pasa de leerlo entero a no leer nada. */
+  constructor(private vault: Vault, private fileManager: FileManager, private cache: Record<string, EntradaCache> = {}) {}
 
   async listar(): Promise<Map<string, string>> {
     const salida = new Map<string, string>();
+    const vistas = new Set<string>();
     for (const archivo of this.vault.getFiles()) {
       if (ocultaParaSync(archivo.path)) continue;
-      const datos = await this.vault.adapter.readBinary(archivo.path);
-      salida.set(archivo.path, await hashDeBuffer(datos));
+      vistas.add(archivo.path);
+      const { mtime, size } = archivo.stat;
+      let h = hashEnCache(this.cache, archivo.path, mtime, size);
+      if (h === null) {
+        h = await hashDeBuffer(await this.vault.adapter.readBinary(archivo.path));
+        this.cache[archivo.path] = { m: mtime, s: size, h };
+      }
+      salida.set(archivo.path, h);
     }
+    for (const ruta of Object.keys(this.cache)) if (!vistas.has(ruta)) delete this.cache[ruta];
     return salida;
   }
 
@@ -94,6 +105,15 @@ export class HttpClienteServidor implements ClienteServidor {
     if (ifMatch !== undefined) headers["If-Match"] = ifMatch;
     const r = await requestUrl({
       url: this.url(ruta), method: "PUT", headers, body: datos, throw: false,
+    });
+    return { ok: r.status === 200, status: r.status };
+  }
+
+  async mover(de: string, a: string, hash: string): Promise<RespuestaServidor> {
+    const r = await requestUrl({
+      url: `${this.servidor.replace(/\/+$/, "")}/api/vault/mover`, method: "POST",
+      headers: { "X-Sync-Token": this.token }, contentType: "application/json",
+      body: JSON.stringify({ de, a, hash }), throw: false,
     });
     return { ok: r.status === 200, status: r.status };
   }

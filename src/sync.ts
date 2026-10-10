@@ -136,6 +136,8 @@ export interface ClienteServidor {
   bajar(ruta: string): Promise<ArrayBuffer>;
   subir(ruta: string, datos: ArrayBuffer, ifMatch?: string): Promise<RespuestaServidor>;
   borrar(ruta: string): Promise<RespuestaServidor>;
+  /** Mueve en el servidor sin borrar (PLAN_VAULTS_NORI V.5). `hash` = el del manifiesto para `de`. */
+  mover?(de: string, a: string, hash: string): Promise<RespuestaServidor>;
 }
 
 /**
@@ -168,6 +170,7 @@ export function conPrefijo(cliente: ClienteServidor, prefijo: string): ClienteSe
     bajar: (ruta) => cliente.bajar(anteponer(ruta)),
     subir: (ruta, datos, ifMatch) => cliente.subir(anteponer(ruta), datos, ifMatch),
     borrar: (ruta) => cliente.borrar(anteponer(ruta)),
+    mover: cliente.mover ? (de, a, hash) => cliente.mover!(anteponer(de), anteponer(a), hash) : undefined,
   };
 }
 

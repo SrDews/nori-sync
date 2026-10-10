@@ -18,4 +18,4 @@ jobs:
           subject-path: main.js
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" main.js manifest.json --title "$GITHUB_REF_NAME" --notes "Nori Sync $GITHUB_REF_NAME"
+        run: gh release create "$GITHUB_REF_NAME" main.js manifest.json styles.css --title "$GITHUB_REF_NAME" --notes "Nori Sync $GITHUB_REF_NAME"

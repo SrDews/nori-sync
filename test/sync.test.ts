@@ -491,3 +491,41 @@ test("snapshot final: después de un sync limpio, refleja exactamente el estado 
   const r2 = await sinc.correr(false);
   assert.deepEqual(r2, { subidos: 0, bajados: 0, borradosLocal: 0, borradosRemoto: 0, conflictos: 0, errores: [] });
 });
+
+// ---------- Vaults Nori (PLAN_VAULTS_NORI): FOTOS/, enlaces, mezcla y caché ----------
+import { planFotos, reubicarEnlaces, decidirCambioVault, enlaceEsDeFoto, hashEnCache, fotoBienUbicada } from "../src/vaults";
+
+test("planFotos: vinculado a un Vault Nori, toda foto fuera de FOTOS/ va a FOTOS/ (choque → « (2)»)", () => {
+  const { mapa, sinLugar } = planFotos(["adjuntos/a.png", "x/a.png", "FOTOS/b.png", "nota.md", ".obsidian/i.png"], false);
+  assert.deepEqual([...mapa], [["adjuntos/a.png", "FOTOS/a.png"], ["x/a.png", "FOTOS/a (2).png"]]);
+  assert.deepEqual(sinLugar, []);
+});
+
+test("planFotos: sincronizando todo, la foto va a FOTOS/ de su carpeta de primer nivel; en la raíz no hay lugar", () => {
+  const { mapa, sinLugar } = planFotos(["MED 3°/adjuntos/a.png", "MED 3°/FOTOS/b.png", "suelta.png"], true);
+  assert.deepEqual([...mapa], [["MED 3°/adjuntos/a.png", "MED 3°/FOTOS/a.png"]]);
+  assert.deepEqual(sinLugar, ["suelta.png"]);
+  assert.equal(fotoBienUbicada("MED 3°/FOTOS/b.png", true), true);
+});
+
+test("reubicarEnlaces: rutas completas en notas, nombre suelto en canvas; un [[nombre]] suelto no se toca", () => {
+  const mapa = new Map([["adjuntos/Pasted image 1.png", "FOTOS/Pasted image 1.png"]]);
+  const md = reubicarEnlaces("![[adjuntos/Pasted image 1.png|200]] ![[Pasted image 1.png]] ![x](adjuntos/Pasted%20image%201.png)", "md", mapa);
+  assert.equal(md.texto, "![[FOTOS/Pasted image 1.png|200]] ![[Pasted image 1.png]] ![x](FOTOS/Pasted%20image%201.png)");
+  assert.equal(md.cambios, 2);
+  const canvas = reubicarEnlaces('{"nodes":[{"id":"n1","type":"file","file":"Pasted image 1.png"},{"id":"n2","type":"text","text":"hola"}],"edges":[]}', "canvas", mapa);
+  assert.equal(canvas.cambios, 1);
+  assert.equal((JSON.parse(canvas.texto) as { nodes: Array<{ file?: string }> }).nodes[0].file, "FOTOS/Pasted image 1.png");
+  assert.equal(reubicarEnlaces("{roto", "canvas", mapa).cambios, 0);
+});
+
+test("decidirCambioVault, enlaceEsDeFoto, planFotos con excluidas y hashEnCache", () => {
+  assert.equal(decidirCambioVault("Corte 1", "Corte 2", 0), "directo");
+  assert.equal(decidirCambioVault("Corte 1", "Corte 2", 4), "preguntar");     // se subiría todo a Corte 2
+  assert.equal(decidirCambioVault("", "Corte 2", 4), "bloquear");             // se anidaría todo un nivel
+  assert.equal(enlaceEsDeFoto("FOTOS/a.png", "adj/a.png", "FOTOS/a.png"), true);
+  assert.equal(enlaceEsDeFoto("fig", "adj/a.png", "FOTOS/a.png"), false);
+  assert.equal(planFotos(["adj/a.png"], false, new Set(["adj/a.png"])).mapa.size, 0);
+  assert.equal(hashEnCache({ "a.md": { m: 1, s: 2, h: "abc" } }, "a.md", 1, 2), "abc");
+  assert.equal(hashEnCache({ "a.md": { m: 1, s: 2, h: "abc" } }, "a.md", 1, 3), null);
+});
